@@ -1,0 +1,8 @@
+[project]
+name = "emojies-parser"
+version = "0.1.0"
+description = "Easily mass-download emojis from any Discord server from just a link!"
+requires-python = ">=3.14"
+dependencies = [
+    "pydoll-python>=2.14.0",
+]
