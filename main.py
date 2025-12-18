@@ -17,6 +17,7 @@ from rich.table import Column
 from PIL import Image
 
 console = Console()
+DOWNLOAD_THREADS = 5
 
 def sanitize_filename(filename):
     """Sanitize filename for Windows compatibility."""
@@ -83,7 +84,7 @@ async def get_media(guild: str):
         except asyncio.TimeoutError:
             console.print("⏰ Timeout: Request was not captured within 60 seconds", style="red")
 
-async def download_emojis(response_file: Path, max_concurrent=10):
+async def download_emojis(response_file: Path, max_concurrent=DOWNLOAD_THREADS):
     # Load emoji data
     with open(response_file, 'r') as f:
         emojis = json.load(f)['data']['emojis']
@@ -218,7 +219,7 @@ async def download_emojis(response_file: Path, max_concurrent=10):
 
     console.print(completion_msg)
 
-async def download_stickers(response_file: Path, max_concurrent=10):
+async def download_stickers(response_file: Path, max_concurrent=DOWNLOAD_THREADS):
     # Load sticker data
     with open(response_file, 'r') as f:
         stickers = json.load(f)['data']['stickers']
@@ -379,6 +380,11 @@ async def download_stickers(response_file: Path, max_concurrent=10):
 
 if __name__ == "__main__":
     console.print(Panel("🎭 [bold cyan]Discord Emoji Downloader[/bold cyan] 🎭", expand=False))
+    console.print(f"[yellow]Please enter amount of threads to use (default {DOWNLOAD_THREADS}):[/yellow] ",
+                  end="")
+    threads_input = input().strip()
+    if threads_input.isdigit() and int(threads_input) > 0:
+        DOWNLOAD_THREADS = int(threads_input)
     console.print("[yellow]Please enter guild invite code:[/yellow] ", end="")
     guild_invite = input().strip()
 
@@ -390,5 +396,5 @@ if __name__ == "__main__":
     else:
         console.print(f"[green]Using existing guild data from: {output_file}[/green]")
 
-    asyncio.run(download_emojis(output_file))
-    asyncio.run(download_stickers(output_file))
+    asyncio.run(download_emojis(output_file, DOWNLOAD_THREADS))
+    asyncio.run(download_stickers(output_file, DOWNLOAD_THREADS))
