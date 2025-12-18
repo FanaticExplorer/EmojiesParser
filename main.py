@@ -385,7 +385,7 @@ if __name__ == "__main__":
     threads_input = input().strip()
     if threads_input.isdigit() and int(threads_input) > 0:
         DOWNLOAD_THREADS = int(threads_input)
-    console.print("[yellow]Please enter guild invite code:[/yellow] ", end="")
+    console.print("[yellow]Please enter guild invite code (or ID):[/yellow] ", end="")
     guild_invite = input().strip()
     if '/' in guild_invite:
         guild_invite = guild_invite.rstrip('/').split('/')[-1]
