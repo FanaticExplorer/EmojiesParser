@@ -387,6 +387,8 @@ if __name__ == "__main__":
         DOWNLOAD_THREADS = int(threads_input)
     console.print("[yellow]Please enter guild invite code:[/yellow] ", end="")
     guild_invite = input().strip()
+    if '/' in guild_invite:
+        guild_invite = guild_invite.rstrip('/').split('/')[-1]
 
     output_file = Path(f"output/{guild_invite}/response.json")
 
