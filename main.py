@@ -3,6 +3,7 @@ import json
 import time
 from functools import partial
 from pathlib import Path
+import io
 
 import aiohttp
 from pydoll.browser.chromium import Chrome
@@ -12,6 +13,7 @@ from rich.console import Console
 from rich.progress import Progress, TextColumn, BarColumn, SpinnerColumn, TimeElapsedColumn
 from rich.panel import Panel
 from rich.table import Column
+from PIL import Image
 
 console = Console()
 
@@ -151,6 +153,112 @@ async def download_emojis(response_file: Path, max_concurrent=5):
 
     console.print(completion_msg)
 
+async def download_stickers(response_file: Path, max_concurrent=5):
+    # Load sticker data
+    with open(response_file, 'r') as f:
+        stickers = json.load(f)['data']['stickers']
+
+    total_stickers = len(stickers)
+    console.print(f"[cyan]Found {total_stickers} stickers - Starting download...[/cyan]")
+
+    # Setup download folder
+    download_folder = response_file.parent / "stickers"
+    download_folder.mkdir(parents=True, exist_ok=True)
+
+    downloaded_count = 0
+    failed_count = 0
+    semaphore = asyncio.Semaphore(max_concurrent)
+    start_time = time.time()
+
+    # Create progress bar
+    with Progress(
+            SpinnerColumn(spinner_name="bouncingBar", style="cyan"),
+            TextColumn("[progress.description]{task.description}", table_column=Column(width=30, no_wrap=True)),
+            BarColumn(complete_style="cyan"),
+            TextColumn("[blue]{task.completed}/{task.total}[/blue]"),
+            TimeElapsedColumn(),
+            console=console,
+            transient=True
+    ) as progress:
+        task = progress.add_task("Downloading: ", total=total_stickers)
+
+        async def download_single_sticker(session, sticker):
+            nonlocal downloaded_count, failed_count
+
+            async with semaphore:
+                name = sticker['name']
+                sticker_id = sticker['id']
+
+                # Build URL for stickers
+                url = f"https://media.discordapp.net/stickers/{sticker_id}.png"
+                progress.update(task, description=f"Downloading: {name}")
+
+                try:
+                    async with session.get(url) as response:
+                        if response.status == 200:
+                            image_bytes = await response.read()
+
+                            # Process with Pillow
+                            with Image.open(io.BytesIO(image_bytes)) as im:
+                                is_animated = getattr(im, 'is_animated', False)
+
+                                if not is_animated:
+                                    # Static PNG
+                                    file_path = download_folder / f"{name}.png"
+                                    im.save(file_path, 'PNG')
+                                else:
+                                    # Animated APNG - convert to GIF
+                                    frames = []
+                                    durations = []
+                                    for frame_num in range(im.n_frames):
+                                        im.seek(frame_num)
+                                        frames.append(im.copy())
+                                        durations.append(im.info.get('duration', 100))
+
+                                    file_path = download_folder / f"{name}.gif"
+                                    save_kwargs = {
+                                        'format': 'GIF',
+                                        'save_all': True,
+                                        'append_images': frames[1:],
+                                        'duration': durations,
+                                        'loop': 0,
+                                        'optimize': True,
+                                    }
+                                    if 'transparency' in im.info:
+                                        save_kwargs['transparency'] = im.info['transparency']
+                                    frames[0].save(file_path, **save_kwargs)
+
+                            downloaded_count += 1
+                        else:
+                            failed_count += 1
+
+                    progress.update(task, advance=1, description="Downloading...")
+                except Exception as e:
+                    failed_count += 1
+                    progress.update(task, advance=1, description="Downloading...")
+
+        # Create optimized session
+        connector = aiohttp.TCPConnector(
+            limit=max_concurrent * 2,
+            limit_per_host=max_concurrent,
+            ttl_dns_cache=300
+        )
+
+        timeout = aiohttp.ClientTimeout(total=15, connect=5)
+
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            tasks = [download_single_sticker(session, sticker) for sticker in stickers]
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Simple completion message
+    elapsed_time = time.time() - start_time
+
+    completion_msg = f"✅ [green]Downloaded {downloaded_count} stickers in {elapsed_time:.1f}s[/green]"
+    if failed_count > 0:
+        completion_msg += f" [red]({failed_count} failed)[/red]"
+
+    console.print(completion_msg)
+
 
 
 if __name__ == "__main__":
@@ -167,3 +275,4 @@ if __name__ == "__main__":
         console.print(f"[green]Using existing guild data from: {output_file}[/green]")
 
     asyncio.run(download_emojis(output_file))
+    asyncio.run(download_stickers(output_file))
