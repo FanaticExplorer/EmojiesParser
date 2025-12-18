@@ -1,14 +1,21 @@
 import asyncio
 import json
+import time
 from functools import partial
 from pathlib import Path
 
+import aiohttp
 from pydoll.browser.chromium import Chrome
 from pydoll.browser.options import ChromiumOptions
 from pydoll.protocol.network.events import NetworkEvent
+from rich.console import Console
+from rich.progress import Progress, TextColumn, BarColumn, SpinnerColumn, TimeElapsedColumn
+from rich.panel import Panel
+from rich.table import Column
 
+console = Console()
 
-async def get_emojis_dict(guild_invite: str):
+async def get_media(guild: str):
     options = ChromiumOptions()
     options.add_argument('--headless=new')
     options.add_argument('--start-maximized')
@@ -16,7 +23,7 @@ async def get_emojis_dict(guild_invite: str):
     options.add_argument('--disable-blink-features=AutomationControlled')
 
     # Create output directory and file path
-    output_dir = Path(f"output/{guild_invite}")
+    output_dir = Path(f"output/{guild}")
     output_dir.mkdir(parents=True, exist_ok=True)
     output_file = output_dir / "response.json"
 
@@ -37,13 +44,12 @@ async def get_emojis_dict(guild_invite: str):
                 request_id = event['params']['requestId']
                 await asyncio.sleep(1)
                 body = await tab.get_network_response_body(request_id)
-                print(body)
 
                 # Save output to file with 4-space formatting
                 response_data = json.loads(body)
                 with open(output_file, 'w') as f:
                     json.dump(response_data, f, indent=4)
-                print(f"Output saved to: {output_file}")
+                console.print(f"✅ Guild data saved to: {output_file}", style="green")
 
                 request_captured.set()
 
@@ -52,7 +58,7 @@ async def get_emojis_dict(guild_invite: str):
 
         # Inputting the info
         input_field = await tab.find(id="inputVal")
-        await input_field.type_text(guild_invite, humanize=True)
+        await input_field.type_text(guild, humanize=True)
         await asyncio.sleep(1)
         submit_button = await tab.find(text="Check")
         await submit_button.click()
@@ -61,7 +67,103 @@ async def get_emojis_dict(guild_invite: str):
         try:
             await asyncio.wait_for(request_captured.wait(), timeout=60)
         except asyncio.TimeoutError:
-            print("Timeout: Request was not captured within 60 seconds")
+            console.print("⏰ Timeout: Request was not captured within 60 seconds", style="red")
+
+async def download_emojis(response_file: Path, max_concurrent=5):
+    # Load emoji data
+    with open(response_file, 'r') as f:
+        emojis = json.load(f)['data']['emojis']
+
+    total_emojis = len(emojis)
+    console.print(f"[cyan]Found {total_emojis} emojis - Starting download...[/cyan]")
+
+    # Setup download folder
+    download_folder = response_file.parent / "emojis"
+    download_folder.mkdir(parents=True, exist_ok=True)
+
+    downloaded_count = 0
+    failed_count = 0
+    semaphore = asyncio.Semaphore(max_concurrent)
+    start_time = time.time()
+
+    # Create progress bar
+    with Progress(
+        SpinnerColumn(spinner_name="bouncingBar", style="cyan"),
+        TextColumn("[progress.description]{task.description}", table_column=Column(width=30, no_wrap=True)),
+        BarColumn(complete_style="cyan"),
+        TextColumn("[blue]{task.completed}/{task.total}[/blue]"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True
+    ) as progress:
+        task = progress.add_task("Downloading: ", total=total_emojis)
+
+        async def download_single_emoji(session, emoji):
+            nonlocal downloaded_count, failed_count
+
+            async with semaphore:
+                name = emoji['name']
+                emoji_id = emoji['id']
+                is_animated = emoji.get('animated', False)
+
+                # Build URL and file path
+                extension = '.gif' if is_animated else '.webp'
+                url = f"https://cdn.discordapp.com/emojis/{emoji_id}{extension}"
+                file_path = download_folder / f"{name}{extension}"
+
+                # Prepare a truncated, safe description for the progress bar
+                display_name = f"{name}{extension}"
+                progress.update(task, description=f"Downloading: {display_name}")
+
+                try:
+                    async with session.get(url) as response:
+                        if response.status == 200:
+                            content = await response.read()
+                            file_path.write_bytes(content)
+                            downloaded_count += 1
+                            progress.update(task, advance=1, description="Downloading...")
+                        else:
+                            failed_count += 1
+                            progress.update(task, advance=1, description="Downloading...")
+                except Exception as e:
+                    failed_count += 1
+                    progress.update(task, advance=1, description="Downloading...")
+
+        # Create optimized session
+        connector = aiohttp.TCPConnector(
+            limit=max_concurrent * 2,
+            limit_per_host=max_concurrent,
+            ttl_dns_cache=300
+        )
+
+        timeout = aiohttp.ClientTimeout(total=15, connect=5)
+
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            tasks = [download_single_emoji(session, emoji) for emoji in emojis]
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Simple completion message
+    elapsed_time = time.time() - start_time
+
+    completion_msg = f"✅ [green]Downloaded {downloaded_count} emojis in {elapsed_time:.1f}s[/green]"
+    if failed_count > 0:
+        completion_msg += f" [red]({failed_count} failed)[/red]"
+
+    console.print(completion_msg)
+
+
 
 if __name__ == "__main__":
-    asyncio.run(get_emojis_dict("archlinux")) # Replace with your desired guild invite code
+    console.print(Panel("🎭 [bold cyan]Discord Emoji Downloader[/bold cyan] 🎭", expand=False))
+    console.print("[yellow]Please enter guild invite code:[/yellow] ", end="")
+    guild_invite = input().strip()
+
+    output_file = Path(f"output/{guild_invite}/response.json")
+
+    if not output_file.exists():
+        console.print(f"[blue]Fetching data for guild: {guild_invite}[/blue]")
+        asyncio.run(get_media(guild_invite))
+    else:
+        console.print(f"[green]Using existing guild data from: {output_file}[/green]")
+
+    asyncio.run(download_emojis(output_file))
