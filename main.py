@@ -4,6 +4,7 @@ import time
 from functools import partial
 from pathlib import Path
 import io
+import re
 
 import aiohttp
 from pydoll.browser.chromium import Chrome
@@ -16,6 +17,17 @@ from rich.table import Column
 from PIL import Image
 
 console = Console()
+
+def sanitize_filename(filename):
+    """Sanitize filename for Windows compatibility."""
+    # Remove or replace invalid characters
+    filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
+    # Remove trailing dots and spaces
+    filename = filename.rstrip('. ')
+    # Ensure it's not empty
+    if not filename:
+        filename = 'unnamed'
+    return filename
 
 async def get_media(guild: str):
     options = ChromiumOptions()
@@ -71,7 +83,7 @@ async def get_media(guild: str):
         except asyncio.TimeoutError:
             console.print("⏰ Timeout: Request was not captured within 60 seconds", style="red")
 
-async def download_emojis(response_file: Path, max_concurrent=5):
+async def download_emojis(response_file: Path, max_concurrent=10):
     # Load emoji data
     with open(response_file, 'r') as f:
         emojis = json.load(f)['data']['emojis']
@@ -83,10 +95,32 @@ async def download_emojis(response_file: Path, max_concurrent=5):
     download_folder = response_file.parent / "emojis"
     download_folder.mkdir(parents=True, exist_ok=True)
 
+    # Setup error logging
+    error_log_file = response_file.parent / "emoji_errors.log"
+    errors = []
+
     downloaded_count = 0
     failed_count = 0
     semaphore = asyncio.Semaphore(max_concurrent)
     start_time = time.time()
+
+    # Track used filenames to handle duplicates
+    used_filenames = set()
+
+    def get_unique_filename(base_name, extension):
+        """Generate a unique filename by adding numbers if needed."""
+        filename = f"{base_name}{extension}"
+        if filename not in used_filenames:
+            used_filenames.add(filename)
+            return filename
+
+        counter = 1
+        while True:
+            filename = f"{base_name}{counter}{extension}"
+            if filename not in used_filenames:
+                used_filenames.add(filename)
+                return filename
+            counter += 1
 
     # Create progress bar
     with Progress(
@@ -108,28 +142,50 @@ async def download_emojis(response_file: Path, max_concurrent=5):
                 emoji_id = emoji['id']
                 is_animated = emoji.get('animated', False)
 
-                # Build URL and file path
-                extension = '.gif' if is_animated else '.webp'
-                url = f"https://cdn.discordapp.com/emojis/{emoji_id}{extension}"
-                file_path = download_folder / f"{name}{extension}"
+                progress.update(task, description=f"Downloading :{name}:")
 
-                # Prepare a truncated, safe description for the progress bar
-                display_name = f"{name}{extension}"
-                progress.update(task, description=f"Downloading: {display_name}")
+                # Try to download with the expected format first
+                initial_extension = '.gif' if is_animated else '.webp'
+                url = f"https://cdn.discordapp.com/emojis/{emoji_id}{initial_extension}"
 
                 try:
                     async with session.get(url) as response:
                         if response.status == 200:
                             content = await response.read()
+                            # Get unique filename
+                            filename = get_unique_filename(name, initial_extension)
+                            file_path = download_folder / filename
                             file_path.write_bytes(content)
                             downloaded_count += 1
-                            progress.update(task, advance=1, description="Downloading...")
+                            progress.update(task, advance=1)
+                        elif response.status == 415 and is_animated:
+                            # Discord sometimes marks emoji as animated but it's actually webp
+                            # Try downloading as webp instead
+                            webp_url = f"https://cdn.discordapp.com/emojis/{emoji_id}.webp"
+                            async with session.get(webp_url) as webp_response:
+                                if webp_response.status == 200:
+                                    content = await webp_response.read()
+                                    # Get unique filename with webp extension
+                                    filename = get_unique_filename(name, '.webp')
+                                    file_path = download_folder / filename
+                                    file_path.write_bytes(content)
+                                    downloaded_count += 1
+                                    progress.update(task, advance=1)
+                                else:
+                                    error_msg = f"Failed to download emoji '{name}' (ID: {emoji_id}): HTTP {webp_response.status} (tried both .gif and .webp) - {url}"
+                                    errors.append(error_msg)
+                                    failed_count += 1
+                                    progress.update(task, advance=1)
                         else:
+                            error_msg = f"Failed to download emoji '{name}' (ID: {emoji_id}): HTTP {response.status} - {url}"
+                            errors.append(error_msg)
                             failed_count += 1
-                            progress.update(task, advance=1, description="Downloading...")
+                            progress.update(task, advance=1)
                 except Exception as e:
+                    error_msg = f"Exception downloading emoji '{name}' (ID: {emoji_id}): {str(e)} - {url}"
+                    errors.append(error_msg)
                     failed_count += 1
-                    progress.update(task, advance=1, description="Downloading...")
+                    progress.update(task, advance=1)
 
         # Create optimized session
         connector = aiohttp.TCPConnector(
@@ -147,13 +203,22 @@ async def download_emojis(response_file: Path, max_concurrent=5):
     # Simple completion message
     elapsed_time = time.time() - start_time
 
+    # Save errors to file if any occurred
+    if errors:
+        with open(error_log_file, 'w') as f:
+            f.write(f"Emoji download errors ({len(errors)} total):\n")
+            f.write("=" * 50 + "\n")
+            for error in errors:
+                f.write(f"{error}\n")
+        console.print(f"[yellow]⚠️  Error log saved to: {error_log_file}[/yellow]")
+
     completion_msg = f"✅ [green]Downloaded {downloaded_count} emojis in {elapsed_time:.1f}s[/green]"
     if failed_count > 0:
         completion_msg += f" [red]({failed_count} failed)[/red]"
 
     console.print(completion_msg)
 
-async def download_stickers(response_file: Path, max_concurrent=5):
+async def download_stickers(response_file: Path, max_concurrent=10):
     # Load sticker data
     with open(response_file, 'r') as f:
         stickers = json.load(f)['data']['stickers']
@@ -164,6 +229,10 @@ async def download_stickers(response_file: Path, max_concurrent=5):
     # Setup download folder
     download_folder = response_file.parent / "stickers"
     download_folder.mkdir(parents=True, exist_ok=True)
+
+    # Setup error logging
+    error_log_file = response_file.parent / "sticker_errors.log"
+    errors = []
 
     downloaded_count = 0
     failed_count = 0
@@ -189,6 +258,9 @@ async def download_stickers(response_file: Path, max_concurrent=5):
                 name = sticker['name']
                 sticker_id = sticker['id']
 
+                # Sanitize filename to avoid Windows invalid characters
+                safe_name = sanitize_filename(name)
+
                 # Build URL for stickers
                 url = f"https://media.discordapp.net/stickers/{sticker_id}.png"
                 progress.update(task, description=f"Downloading: {name}")
@@ -199,43 +271,78 @@ async def download_stickers(response_file: Path, max_concurrent=5):
                             image_bytes = await response.read()
 
                             # Process with Pillow
-                            with Image.open(io.BytesIO(image_bytes)) as im:
-                                is_animated = getattr(im, 'is_animated', False)
+                            try:
+                                with Image.open(io.BytesIO(image_bytes)) as im:
+                                    # Check if animated using proper method
+                                    try:
+                                        is_animated = getattr(im, 'is_animated', False) and im.n_frames > 1
+                                    except (AttributeError, OSError):
+                                        is_animated = False
 
-                                if not is_animated:
-                                    # Static PNG
-                                    file_path = download_folder / f"{name}.png"
-                                    im.save(file_path, 'PNG')
-                                else:
-                                    # Animated APNG - convert to GIF
-                                    frames = []
-                                    durations = []
-                                    for frame_num in range(im.n_frames):
-                                        im.seek(frame_num)
-                                        frames.append(im.copy())
-                                        durations.append(im.info.get('duration', 100))
+                                    if not is_animated:
+                                        # Static PNG
+                                        file_path = download_folder / f"{safe_name}.png"
+                                        # Convert to RGB if necessary to ensure PNG compatibility
+                                        if im.mode in ('RGBA', 'LA'):
+                                            im.save(file_path, 'PNG', optimize=True)
+                                        else:
+                                            # Convert to RGBA to preserve any transparency
+                                            im = im.convert('RGBA')
+                                            im.save(file_path, 'PNG', optimize=True)
+                                    else:
+                                        # Animated APNG - convert to GIF
+                                        frames = []
+                                        durations = []
+                                        try:
+                                            for frame_num in range(im.n_frames):
+                                                im.seek(frame_num)
+                                                frame = im.copy()
+                                                # Convert to RGBA for consistency
+                                                if frame.mode != 'RGBA':
+                                                    frame = frame.convert('RGBA')
+                                                frames.append(frame)
+                                                # Get duration, default to 100ms if not available
+                                                duration = im.info.get('duration', 100)
+                                                durations.append(duration)
 
-                                    file_path = download_folder / f"{name}.gif"
-                                    save_kwargs = {
-                                        'format': 'GIF',
-                                        'save_all': True,
-                                        'append_images': frames[1:],
-                                        'duration': durations,
-                                        'loop': 0,
-                                        'optimize': True,
-                                    }
-                                    if 'transparency' in im.info:
-                                        save_kwargs['transparency'] = im.info['transparency']
-                                    frames[0].save(file_path, **save_kwargs)
+                                            file_path = download_folder / f"{safe_name}.gif"
+                                            # Save as GIF with proper optimization
+                                            frames[0].save(
+                                                file_path,
+                                                format='GIF',
+                                                save_all=True,
+                                                append_images=frames[1:],
+                                                duration=durations,
+                                                loop=0,
+                                                optimize=True,
+                                                disposal=2  # Clear frame before next
+                                            )
+                                        except Exception as gif_error:
+                                            # If GIF conversion fails, save as static PNG
+                                            file_path = download_folder / f"{safe_name}.png"
+                                            im.seek(0)  # Go to first frame
+                                            frame = im.copy()
+                                            if frame.mode != 'RGBA':
+                                                frame = frame.convert('RGBA')
+                                            frame.save(file_path, 'PNG', optimize=True)
 
-                            downloaded_count += 1
+                                downloaded_count += 1
+                            except Exception as pil_error:
+                                # If PIL processing fails, save raw bytes as PNG
+                                file_path = download_folder / f"{safe_name}.png"
+                                file_path.write_bytes(image_bytes)
+                                downloaded_count += 1
                         else:
+                            error_msg = f"Failed to download sticker '{name}' (ID: {sticker_id}): HTTP {response.status} - {url}"
+                            errors.append(error_msg)
                             failed_count += 1
 
-                    progress.update(task, advance=1, description="Downloading...")
+                    progress.update(task, advance=1)
                 except Exception as e:
+                    error_msg = f"Exception downloading sticker '{name}' (ID: {sticker_id}): {str(e)} - {url}"
+                    errors.append(error_msg)
                     failed_count += 1
-                    progress.update(task, advance=1, description="Downloading...")
+                    progress.update(task, advance=1)
 
         # Create optimized session
         connector = aiohttp.TCPConnector(
@@ -253,6 +360,15 @@ async def download_stickers(response_file: Path, max_concurrent=5):
     # Simple completion message
     elapsed_time = time.time() - start_time
 
+    # Save errors to file if any occurred
+    if errors:
+        with open(error_log_file, 'w') as f:
+            f.write(f"Sticker download errors ({len(errors)} total):\n")
+            f.write("=" * 50 + "\n")
+            for error in errors:
+                f.write(f"{error}\n")
+        console.print(f"[yellow]⚠️  Error log saved to: {error_log_file}[/yellow]")
+
     completion_msg = f"✅ [green]Downloaded {downloaded_count} stickers in {elapsed_time:.1f}s[/green]"
     if failed_count > 0:
         completion_msg += f" [red]({failed_count} failed)[/red]"
@@ -269,8 +385,8 @@ if __name__ == "__main__":
     output_file = Path(f"output/{guild_invite}/response.json")
 
     if not output_file.exists():
-        console.print(f"[blue]Fetching data for guild: {guild_invite}[/blue]")
-        asyncio.run(get_media(guild_invite))
+        with console.status(f"[blue]Fetching data for guild: {guild_invite}[/blue]", spinner="dots"):
+            asyncio.run(get_media(guild_invite))
     else:
         console.print(f"[green]Using existing guild data from: {output_file}[/green]")
 
