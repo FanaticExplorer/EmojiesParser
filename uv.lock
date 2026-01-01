@@ -304,7 +304,7 @@ wheels = [
 
 [[package]]
 name = "pydoll-python"
-version = "2.14.0"
+version = "2.15.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -312,9 +312,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/85/02/3b1d6a9eeb011535e8413de65c75166accd2eca15952b78ea32e8c25ebdc/pydoll_python-2.14.0.tar.gz", hash = "sha256:564e3a20264626168251e766b64a01cba096249a45967a49ebd96f802cb947df", size = 192767, upload-time = "2025-12-10T13:37:00.576Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0c/bf/be5171ed4439fa8b2c5dc528092ed011991ae616c4f25a9fd909ab3c2c39/pydoll_python-2.15.0.tar.gz", hash = "sha256:994ea9e6c223c3cb3dc4d29094d3b34c066edab4b2f69151e90cad19dffb86b4", size = 192935, upload-time = "2025-12-24T00:32:46.213Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/11/47/b061b97d29d4b4d0fb7209b4207c3ca78d45ac4e3a9cb457d86c887d01f3/pydoll_python-2.14.0-py3-none-any.whl", hash = "sha256:81821b9e6a2ee01037b5ea426c19eb0acd1239458c3c412ae378d419cbe54eb3", size = 222817, upload-time = "2025-12-10T13:36:59.545Z" },
+    { url = "https://files.pythonhosted.org/packages/2a/e7/7cf00535379d6daf902ed996164d168da9438120c2ed710fd0d078f49968/pydoll_python-2.15.0-py3-none-any.whl", hash = "sha256:8359607357140c03ce24cace990c9ad3be0141be6895c114e353f815fb2395c5", size = 222966, upload-time = "2025-12-24T00:32:44.83Z" },
 ]
 
 [[package]]
