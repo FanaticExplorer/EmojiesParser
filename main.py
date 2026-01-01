@@ -19,6 +19,25 @@ from PIL import Image
 console = Console()
 DOWNLOAD_THREADS = 5
 
+def save_png_from_image(image, file_path):
+    """Helper function to save a PIL Image as PNG with proper mode conversion."""
+    if image.mode in ('RGBA', 'LA'):
+        image.save(file_path, 'PNG', optimize=True)
+    else:
+        # Convert to RGBA to preserve any transparency
+        image_rgb = image.convert('RGBA')
+        image_rgb.save(file_path, 'PNG', optimize=True)
+
+def save_error_log(error_log_file: Path, errors: list, item_type: str):
+    """Helper function to save errors to a log file."""
+    if errors:
+        with open(error_log_file, 'w') as f:
+            f.write(f"{item_type} download errors ({len(errors)} total):\n")
+            f.write("=" * 50 + "\n")
+            for error in errors:
+                f.write(f"{error}\n")
+        console.print(f"[yellow]⚠️  Error log saved to: {error_log_file}[/yellow]")
+
 def sanitize_filename(filename):
     """Sanitize filename for Windows compatibility."""
     # Remove or replace invalid characters
@@ -52,24 +71,23 @@ async def get_media(guild: str):
         request_captured = asyncio.Event()
 
         # Get ready to monitor the requests
-        # noinspection PyShadowingNames
-        async def capture_emojies_request(tab, event):
+        async def capture_emojies_request(tab_arg, event, output_file_arg):
             url = event['params']['response']['url']
             if 'nelly.tools/api/lookup/guild-followup/' in url:
                 request_id = event['params']['requestId']
                 await asyncio.sleep(1)
-                body = await tab.get_network_response_body(request_id)
+                body = await tab_arg.get_network_response_body(request_id)
 
                 # Save output to file with 4-space formatting
                 response_data = json.loads(body)
-                with open(output_file, 'w') as f:
-                    json.dump(response_data, f, indent=4)
-                console.print(f"✅ Guild data saved to: {output_file}", style="green")
+                with open(output_file_arg, 'w') as response_f:
+                    json.dump(response_data, response_f, indent=4)
+                console.print(f"✅ Guild data saved to: {output_file_arg}", style="green")
 
                 request_captured.set()
 
         await tab.enable_network_events()
-        await tab.on(NetworkEvent.RESPONSE_RECEIVED, partial(capture_emojies_request, tab))
+        await tab.on(NetworkEvent.RESPONSE_RECEIVED, partial(capture_emojies_request, tab, output_file_arg=output_file))
 
         # Inputting the info
         input_field = await tab.find(id="inputVal")
@@ -135,7 +153,7 @@ async def download_emojis(response_file: Path, max_concurrent=DOWNLOAD_THREADS):
     ) as progress:
         task = progress.add_task("Downloading: ", total=total_emojis)
 
-        async def download_single_emoji(session, emoji):
+        async def download_single_emoji(session_arg, emoji):
             nonlocal downloaded_count, failed_count
 
             async with semaphore:
@@ -150,7 +168,7 @@ async def download_emojis(response_file: Path, max_concurrent=DOWNLOAD_THREADS):
                 url = f"https://cdn.discordapp.com/emojis/{emoji_id}{initial_extension}"
 
                 try:
-                    async with session.get(url) as response:
+                    async with session_arg.get(url) as response:
                         if response.status == 200:
                             content = await response.read()
                             # Get unique filename
@@ -163,7 +181,7 @@ async def download_emojis(response_file: Path, max_concurrent=DOWNLOAD_THREADS):
                             # Discord sometimes marks emoji as animated but it's actually webp
                             # Try downloading as webp instead
                             webp_url = f"https://cdn.discordapp.com/emojis/{emoji_id}.webp"
-                            async with session.get(webp_url) as webp_response:
+                            async with session_arg.get(webp_url) as webp_response:
                                 if webp_response.status == 200:
                                     content = await webp_response.read()
                                     # Get unique filename with webp extension
@@ -205,13 +223,7 @@ async def download_emojis(response_file: Path, max_concurrent=DOWNLOAD_THREADS):
     elapsed_time = time.time() - start_time
 
     # Save errors to file if any occurred
-    if errors:
-        with open(error_log_file, 'w') as f:
-            f.write(f"Emoji download errors ({len(errors)} total):\n")
-            f.write("=" * 50 + "\n")
-            for error in errors:
-                f.write(f"{error}\n")
-        console.print(f"[yellow]⚠️  Error log saved to: {error_log_file}[/yellow]")
+    save_error_log(error_log_file, errors, "Emoji")
 
     completion_msg = f"✅ [green]Downloaded {downloaded_count} emojis in {elapsed_time:.1f}s[/green]"
     if failed_count > 0:
@@ -252,7 +264,7 @@ async def download_stickers(response_file: Path, max_concurrent=DOWNLOAD_THREADS
     ) as progress:
         task = progress.add_task("Downloading: ", total=total_stickers)
 
-        async def download_single_sticker(session, sticker):
+        async def download_single_sticker(session_arg, sticker):
             nonlocal downloaded_count, failed_count
 
             async with semaphore:
@@ -267,7 +279,7 @@ async def download_stickers(response_file: Path, max_concurrent=DOWNLOAD_THREADS
                 progress.update(task, description=f"Downloading: {name}")
 
                 try:
-                    async with session.get(url) as response:
+                    async with session_arg.get(url) as response:
                         if response.status == 200:
                             image_bytes = await response.read()
 
@@ -284,12 +296,7 @@ async def download_stickers(response_file: Path, max_concurrent=DOWNLOAD_THREADS
                                         # Static PNG
                                         file_path = download_folder / f"{safe_name}.png"
                                         # Convert to RGB if necessary to ensure PNG compatibility
-                                        if im.mode in ('RGBA', 'LA'):
-                                            im.save(file_path, 'PNG', optimize=True)
-                                        else:
-                                            # Convert to RGBA to preserve any transparency
-                                            im = im.convert('RGBA')
-                                            im.save(file_path, 'PNG', optimize=True)
+                                        save_png_from_image(im, file_path)
                                     else:
                                         # Animated APNG - convert to GIF
                                         frames = []
@@ -318,17 +325,15 @@ async def download_stickers(response_file: Path, max_concurrent=DOWNLOAD_THREADS
                                                 optimize=True,
                                                 disposal=2  # Clear frame before next
                                             )
-                                        except Exception as gif_error:
+                                        except (IOError, OSError, ValueError):
                                             # If GIF conversion fails, save as static PNG
                                             file_path = download_folder / f"{safe_name}.png"
                                             im.seek(0)  # Go to first frame
                                             frame = im.copy()
-                                            if frame.mode != 'RGBA':
-                                                frame = frame.convert('RGBA')
-                                            frame.save(file_path, 'PNG', optimize=True)
+                                            save_png_from_image(frame, file_path)
 
                                 downloaded_count += 1
-                            except Exception as pil_error:
+                            except (IOError, OSError, ValueError):
                                 # If PIL processing fails, save raw bytes as PNG
                                 file_path = download_folder / f"{safe_name}.png"
                                 file_path.write_bytes(image_bytes)
@@ -362,13 +367,7 @@ async def download_stickers(response_file: Path, max_concurrent=DOWNLOAD_THREADS
     elapsed_time = time.time() - start_time
 
     # Save errors to file if any occurred
-    if errors:
-        with open(error_log_file, 'w') as f:
-            f.write(f"Sticker download errors ({len(errors)} total):\n")
-            f.write("=" * 50 + "\n")
-            for error in errors:
-                f.write(f"{error}\n")
-        console.print(f"[yellow]⚠️  Error log saved to: {error_log_file}[/yellow]")
+    save_error_log(error_log_file, errors, "Sticker")
 
     completion_msg = f"✅ [green]Downloaded {downloaded_count} stickers in {elapsed_time:.1f}s[/green]"
     if failed_count > 0:
@@ -390,13 +389,13 @@ if __name__ == "__main__":
     if '/' in guild_invite:
         guild_invite = guild_invite.rstrip('/').split('/')[-1]
 
-    output_file = Path(f"output/{guild_invite}/response.json")
+    output_json_file = Path(f"output/{guild_invite}/response.json")
 
-    if not output_file.exists():
+    if not output_json_file.exists():
         with console.status(f"[blue]Fetching data for guild: {guild_invite}[/blue]", spinner="dots"):
             asyncio.run(get_media(guild_invite))
     else:
-        console.print(f"[green]Using existing guild data from: {output_file}[/green]")
+        console.print(f"[green]Using existing guild data from: {output_json_file}[/green]")
 
-    asyncio.run(download_emojis(output_file, DOWNLOAD_THREADS))
-    asyncio.run(download_stickers(output_file, DOWNLOAD_THREADS))
+    asyncio.run(download_emojis(output_json_file, DOWNLOAD_THREADS))
+    asyncio.run(download_stickers(output_json_file, DOWNLOAD_THREADS))
