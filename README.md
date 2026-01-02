@@ -1,5 +1,9 @@
 # EmojisParser
 
+[![Python 3.14+](https://img.shields.io/badge/Python-3.14%2B-blue)](https://www.python.org/downloads/)
+![uv](https://img.shields.io/badge/uv-%23DE5FE9.svg?logo=uv&logoColor=white)
+![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?logo=discord&logoColor=white)
+
 EmojisParser is a Python-based tool designed to download emojis and stickers from almost any public server.
 
 ![Showcase of how it works](./assets/showcase.png)
