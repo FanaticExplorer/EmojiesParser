@@ -270,12 +270,23 @@ async def download_stickers(response_file: Path, max_concurrent=DOWNLOAD_THREADS
             async with semaphore:
                 name = sticker['name']
                 sticker_id = sticker['id']
+                format_type = sticker.get('format_type', 1)  # Default to PNG if not specified
 
                 # Sanitize filename to avoid Windows invalid characters
                 safe_name = sanitize_filename(name)
 
-                # Build URL for stickers
-                url = f"https://media.discordapp.net/stickers/{sticker_id}.png"
+                # Build URL for stickers based on format_type
+                # format_type: 1 = PNG, 2 = APNG, 3 = Lottie, 4 = GIF
+                if format_type == 3:
+                    # Lottie format (JSON)
+                    url = f"https://media.discordapp.net/stickers/{sticker_id}.json"
+                elif format_type == 4:
+                    # GIF format
+                    url = f"https://media.discordapp.net/stickers/{sticker_id}.gif"
+                else:
+                    # PNG or APNG (both use .png extension)
+                    url = f"https://media.discordapp.net/stickers/{sticker_id}.png"
+
                 progress.update(task, description=f"Downloading: {name}")
 
                 try:
@@ -283,61 +294,70 @@ async def download_stickers(response_file: Path, max_concurrent=DOWNLOAD_THREADS
                         if response.status == 200:
                             image_bytes = await response.read()
 
-                            # Process with Pillow
-                            try:
-                                with Image.open(io.BytesIO(image_bytes)) as im:
-                                    # Check if animated using proper method
-                                    try:
-                                        is_animated = getattr(im, 'is_animated', False) and im.n_frames > 1
-                                    except (AttributeError, OSError):
-                                        is_animated = False
-
-                                    if not is_animated:
-                                        # Static PNG
-                                        file_path = download_folder / f"{safe_name}.png"
-                                        # Convert to RGB if necessary to ensure PNG compatibility
-                                        save_png_from_image(im, file_path)
-                                    else:
-                                        # Animated APNG - convert to GIF
-                                        frames = []
-                                        durations = []
-                                        try:
-                                            for frame_num in range(im.n_frames):
-                                                im.seek(frame_num)
-                                                frame = im.copy()
-                                                # Convert to RGBA for consistency
-                                                if frame.mode != 'RGBA':
-                                                    frame = frame.convert('RGBA')
-                                                frames.append(frame)
-                                                # Get duration, default to 100ms if not available
-                                                duration = im.info.get('duration', 100)
-                                                durations.append(duration)
-
-                                            file_path = download_folder / f"{safe_name}.gif"
-                                            # Save as GIF with proper optimization
-                                            frames[0].save(
-                                                file_path,
-                                                format='GIF',
-                                                save_all=True,
-                                                append_images=frames[1:],
-                                                duration=durations,
-                                                loop=0,
-                                                optimize=True,
-                                                disposal=2  # Clear frame before next
-                                            )
-                                        except (IOError, OSError, ValueError):
-                                            # If GIF conversion fails, save as static PNG
-                                            file_path = download_folder / f"{safe_name}.png"
-                                            im.seek(0)  # Go to first frame
-                                            frame = im.copy()
-                                            save_png_from_image(frame, file_path)
-
-                                downloaded_count += 1
-                            except (IOError, OSError, ValueError):
-                                # If PIL processing fails, save raw bytes as PNG
-                                file_path = download_folder / f"{safe_name}.png"
+                            # Handle Lottie format (JSON)
+                            if format_type == 3:
+                                file_path = download_folder / f"{safe_name}.json"
                                 file_path.write_bytes(image_bytes)
                                 downloaded_count += 1
+                            elif format_type == 4:
+                                # GIF format - save directly
+                                file_path = download_folder / f"{safe_name}.gif"
+                                file_path.write_bytes(image_bytes)
+                                downloaded_count += 1
+                            else:
+                                # Process PNG/APNG with Pillow
+                                try:
+                                    # Use format_type to determine if animated (format_type=2 is APNG)
+                                    is_animated = (format_type == 2)
+
+                                    with Image.open(io.BytesIO(image_bytes)) as im:
+
+                                        if not is_animated:
+                                            # Static PNG
+                                            file_path = download_folder / f"{safe_name}.png"
+                                            # Convert to RGB if necessary to ensure PNG compatibility
+                                            save_png_from_image(im, file_path)
+                                        else:
+                                            # Animated APNG - convert to GIF
+                                            frames = []
+                                            durations = []
+                                            try:
+                                                for frame_num in range(im.n_frames):
+                                                    im.seek(frame_num)
+                                                    frame = im.copy()
+                                                    # Convert to RGBA for consistency
+                                                    if frame.mode != 'RGBA':
+                                                        frame = frame.convert('RGBA')
+                                                    frames.append(frame)
+                                                    # Get duration, default to 100ms if not available
+                                                    duration = im.info.get('duration', 100)
+                                                    durations.append(duration)
+
+                                                file_path = download_folder / f"{safe_name}.gif"
+                                                # Save as GIF with proper optimization
+                                                frames[0].save(
+                                                    file_path,
+                                                    format='GIF',
+                                                    save_all=True,
+                                                    append_images=frames[1:],
+                                                    duration=durations,
+                                                    loop=0,
+                                                    optimize=True,
+                                                    disposal=2  # Clear frame before next
+                                                )
+                                            except (IOError, OSError, ValueError):
+                                                # If GIF conversion fails, save as static PNG
+                                                file_path = download_folder / f"{safe_name}.png"
+                                                im.seek(0)  # Go to first frame
+                                                frame = im.copy()
+                                                save_png_from_image(frame, file_path)
+
+                                    downloaded_count += 1
+                                except (IOError, OSError, ValueError):
+                                    # If PIL processing fails, save raw bytes as PNG
+                                    file_path = download_folder / f"{safe_name}.png"
+                                    file_path.write_bytes(image_bytes)
+                                    downloaded_count += 1
                         else:
                             error_msg = f"Failed to download sticker '{name}' (ID: {sticker_id}): HTTP {response.status} - {url}"
                             errors.append(error_msg)
