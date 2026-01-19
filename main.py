@@ -80,8 +80,8 @@ async def get_media(guild: str):
 
                 # Save output to file with 4-space formatting
                 response_data = json.loads(body)
-                with open(output_file_arg, 'w') as response_f:
-                    json.dump(response_data, response_f, indent=4)
+                with open(output_file_arg, 'w', encoding='utf-8') as response_f:
+                    json.dump(response_data, response_f, indent=4, ensure_ascii=False)
                 console.print(f"✅ Guild data saved to: {output_file_arg}", style="green")
 
                 request_captured.set()
@@ -104,7 +104,7 @@ async def get_media(guild: str):
 
 async def download_emojis(response_file: Path, max_concurrent=DOWNLOAD_THREADS):
     # Load emoji data
-    with open(response_file, 'r') as f:
+    with open(response_file, 'r', encoding='utf-8') as f:
         emojis = json.load(f)['data']['emojis']
 
     total_emojis = len(emojis)
@@ -233,7 +233,7 @@ async def download_emojis(response_file: Path, max_concurrent=DOWNLOAD_THREADS):
 
 async def download_stickers(response_file: Path, max_concurrent=DOWNLOAD_THREADS):
     # Load sticker data
-    with open(response_file, 'r') as f:
+    with open(response_file, 'r', encoding='utf-8') as f:
         stickers = json.load(f)['data']['stickers']
 
     total_stickers = len(stickers)
