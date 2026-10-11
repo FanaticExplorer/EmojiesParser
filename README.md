@@ -8,6 +8,9 @@ EmojisParser is a Python-based tool designed to download emojis and stickers fro
 
 ![Showcase of how it works](./assets/showcase.png)
 
+> [!WARNING]
+> **This repository is planned for archival** as I plan to rewrite it in **Go**, avoiding unnecessary dependencies and improving output quality.
+
 ## Features
 
 - **Emoji Parsing**: Extract emojis from multiple directories and organize them efficiently.
